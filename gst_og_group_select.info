@@ -1,0 +1,13 @@
+name = GST Organic Groups Group Select Widget
+description = Provides a widget that can be used to allow a user to Join/UnJoin from a Group
+package = GST
+core = 7.x
+files[] = gst_og_select_group.module
+
+; Views handlers
+;files[] = gst_auto_terms.views_default.inc
+;files[] = gst_auto_terms_handler_field_taxonomy_index_users_tid.inc
+
+;dependencies[] = autoload 
+;php = 5.2
+version = "7.x-1.0-alpha1"

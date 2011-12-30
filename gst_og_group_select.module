@@ -1,0 +1,772 @@
+<?php
+/**
+* @file
+* GST Auto Terms
+*
+*/
+
+//ADFTODO: The Widget only displays if the user has the "Administer Organic Groups" permission.
+// This mirrors the same behavior as the "Group Audience Select" widget. I want this to be 
+// more granular so I can allow non-admins to add themselves to a group.
+// (or even control the Audience of an Article).
+
+/*
+ * GLOBAL DEFINES
+ */
+//define('GST_FIREPHP_ENABLED', 1);
+
+define('GST_GROUP_SELECT_TABLE_WIDGET', 'gst_og_group_select_table');
+
+/**
+* Implements hook_help().
+*/
+function gst_og_group_select_help($path, $arg) {
+  if ($path == 'admin/help#gst_og_group_select') {
+    return t('GST OG Group Select Module.');
+  }   
+}
+
+/**
+* Implementation of hook_init().
+*/
+function gst_og_group_select_init() {
+  if (GST_FIREPHP_ENABLED) {
+    // FirePHP Library : http://www.firephp.org/HQ/Use.htm
+    // Docs: http://docs.sourcemint.org/firephp.org/firephp/1/-docs/API/FirePHP
+    $firephp_path = libraries_get_path('FirePHPCore');
+    $firephp_path = ($firephp_path ? $firephp_path . '/lib/FirePHPCore/' : '');
+    include_once $firephp_path . 'FirePHP.class.php';
+    //module_load_include('php', 'devel', "FirePHPCore/lib/FirePHPCore/FirePHP.class");
+    //require_once('FirePHPCore/FirePHP.class.php');
+    global $firephp;
+    $firephp = FirePHP::getInstance(true);
+    $options = array('maxObjectDepth' => 7,
+                     'maxArrayDepth' => 7,
+                     'maxDepth' => 10,
+                     'useNativeJsonEncode' => true,
+                     'includeLineNumbers' => true);
+    $firephp->setOptions($options);  // or FB::setOptions($options);
+    //$firephp->setEnabled(false);  // To turn off ALL FirePHP Console Messages
+  
+    //$mail_system = variable_get('mail_system');
+    //dpm($mail_system);
+    //dfb($mail_system, "mail_system");
+  }
+}
+
+/**
+  * Implements hook_og_user_access_alter().
+  *
+  * Add a permission to users to allow them to view the group_audience field.
+  */
+function gst_og_group_select_og_user_access_alter(&$perms, $context) {
+  $c_string = isset($context['string']) ? $context['string'] : NULL;
+  $group = isset($context['group']) ? $context['group'] : NULL;
+  $account = isset($context['group']) ? $context['account'] : NULL;
+  if ($c_string == 'update group_audience field' && $account) {
+    // In order for users to view the group_audience field, they must have "administer group"
+    //  perm, so in certain cases, we add that perm
+    // NOTE: See user.module:user_access() function for drupal_static_fast code as well as bootstrap.inc:drupal_static()
+    //ADFHI: Do we need to use a static var here? Can we perhaps just set the &drupal_static() to a var, 
+    //  and set it since it returns a var by reference? I think we can.
+    $uid = $account->uid;        
+    static $drupal_static_fast;
+    if (!isset($drupal_static_fast)) {
+      $drupal_static_fast['perm'] = &drupal_static('user_access');
+    }
+    $drupal_static_fast['perm'][$uid]['administer group'] = TRUE;    
+  }   
+}
+
+
+/*
+* WIDGET
+*/
+
+function gst_og_group_select_field_widget_info() {
+  return array(
+		GST_GROUP_SELECT_TABLE_WIDGET => array(
+			'label' => t('Group Select Table'),
+      'field types' => array('group'),
+      'behaviors' => array(
+        'multiple values' => FIELD_BEHAVIOR_CUSTOM,
+      ),      
+      'settings' => array(
+        'show_membership_col' => TRUE,
+  			'bFilter' => FALSE,
+  			'bPaginate' => TRUE,
+  			'sPaginationType' => 'two_button',
+      	'iDisplayLength' => 20,  			
+      	'bLengthChange' => TRUE,
+  			'opt_group' => 'auto',
+      ),
+    ),  
+  );
+}
+
+
+/**
+ * Implements hook_field_widget_settings_form().
+ */
+function gst_og_group_select_field_widget_settings_form($field, $instance) {
+  $widget   = $instance['widget'];
+  $defaults = field_info_widget_settings($widget['type']);
+  $settings = array_merge($defaults, $widget['settings']);
+  $form = array();
+  switch ($widget['type']) {
+    case GST_GROUP_SELECT_TABLE_WIDGET:
+      $datatables = module_exists('datatables');
+
+      $form['show_membership_col'] = array(
+      	'#type' => 'checkbox',
+        '#title' => t('Show Membership Status on User Forms'),
+        '#default_value' => isset($settings['show_membership_col']) ? $settings['show_membership_col'] : TRUE,        
+        //'#checked' => $checked,
+      	'#access' => TRUE,
+      );
+      
+      
+      $form['bFilter'] = array(
+      	'#type' => 'checkbox',
+        '#title' => t('Show search/filter textbox'),
+        '#default_value' => isset($settings['bFilter']) ? $settings['bFilter'] : FALSE,        
+        //'#checked' => $checked,
+      	'#access' => $datatables,
+      );
+      
+      $form['bPaginate'] = array(
+      	'#type' => 'checkbox',
+        '#title' => t('Show records on multiple pages'),
+        '#default_value' => isset($settings['bPaginate']) ? $settings['bPaginate'] : TRUE,
+        //'#checked' => $checked,
+      	'#access' => $datatables,
+      );
+      
+      $form['sPaginationType'] = array(
+        '#type' => 'select',
+        '#title' => t('Type of pagination method'),
+        '#options' => array(
+          'two_button' => t('Next/Previous Buttons (two buttons)'),
+          'full_numbers' => t('Next/Previous + Full Numbers (full numbers)'),
+        ),
+      	'#default_value' => isset($settings['sPaginationType']) ? $settings['sPaginationType'] : 'two_button',
+        '#states' => array(
+          'visible' => array(  // action to take.
+            ':input[name="instance[widget][settings][bPaginate]"]' => array('checked' => TRUE),
+          ),
+        ),
+      	'#access' => $datatables,
+      );
+      
+      $form['iDisplayLength'] = array(
+        '#type'             => 'textfield',
+        '#title'            => t('Number of records per page'),
+        '#default_value'    => isset($settings['iDisplayLength']) ? $settings['iDisplayLength'] : 10,
+      	'#element_validate' => array('element_validate_integer_positive'),
+        '#states' => array(
+          'visible' => array(  // action to take.
+            ':input[name="instance[widget][settings][bPaginate]"]' => array('checked' => TRUE),
+          ),
+        ),
+      '#access' => $datatables,
+      );
+      
+      $form['bLengthChange'] = array(
+      	'#type' => 'checkbox',
+        '#title' => t('Allow user to change the length of pages'),
+        '#default_value' => isset($settings['bLengthChange']) ? $settings['bLengthChange'] : TRUE,
+        //'#checked' => $checked,
+        '#states' => array(
+          'visible' => array(  // action to take.
+            ':input[name="instance[widget][settings][bPaginate]"]' => array('checked' => TRUE),
+          ),
+        ),
+      '#access' => $datatables,
+      );
+            
+      // REMOVE BELOW      
+      $form['opt_group'] = array(
+        '#type' => 'radios',
+        '#title' => t('Input type'),
+        '#description' => t('Select the input type that should be used to get the groups audience. Note that the <em>Always show "other groups"</em> option will show all groups including the ones the user is a not a member of.'),
+        '#options' => array(
+          'auto' => t('Automatically decide the input according to user permissions (Recommended)'),
+          'never' => t('Never show "other groups"'),
+          'always' => t('Always show "other groups"'),
+        ),
+        '#default_value' => $settings['opt_group'],
+        '#required' => TRUE,
+      );
+      // REMOVE ABOVE
+      break;
+  }  
+  
+  return $form;  
+}
+
+function gst_og_group_select_field_widget_form(&$form, &$form_state, $field, $instance, $langcode, $items, $delta, $element) {
+  $summary_widget = array();
+  $main_widget = array();
+
+  switch ($instance['widget']['type']) {
+    case GST_GROUP_SELECT_TABLE_WIDGET:     
+      $settings = array(); 
+      //ADFTODO: Add Code to determine if Widget is on a User form - if it is,
+      //  show "group membership status" based upon containing Entity
+      //  In other words, if viewing Admin User Profile, show Admin's status, if showing Joe User's profile, show
+      //  status for Joe User.
+      $form_entity_type = $instance['entity_type']; 
+      $settings['form_entity_type'] = $form_entity_type;
+      if ($form_entity_type == 'user' && isset($form['#user'])) {        
+        $settings['user'] = $form['#user'];
+        $settings['uid'] = $form['#user']->uid;
+      }
+      $settings += $instance['widget']['settings'];                      
+      
+      //ADFTODO: Add code for handling of different "group" groups. OG has 2 different groups:
+      //    'content groups' & 'other groups'
+      //  From what I can tell, "content groups" are ones the logged-in-user is a member of, 'other groups' are groups
+      //    the logged-in-user is NOT a member of.
+      
+      
+      // Determine if a user may see other groups as-well.
+      $opt_group = FALSE;
+
+      if ($instance['widget']['settings']['opt_group'] == 'always' || ($instance['widget']['settings']['opt_group'] == 'auto' && user_access('administer group'))) {
+        $opt_group = TRUE;
+      }
+      $settings['opt_group'] = $opt_group;
+
+      // Get all the groups divided to "content groups" and "other groups".
+      $audience = og_field_audience_options($opt_group);
+
+      // Get all groups that should be excluded.
+      $excludes = array();
+      // If it's an existing group, then exclude itself, as in some cases a group
+      // can act also as a group content, but we want to prevent associating the
+      // group to itself.
+      if (!empty($form['#' . $element['#entity_type']])) {
+        list($id) = entity_extract_ids($element['#entity_type'], $form['#' . $element['#entity_type']]);
+        if (($group = og_get_group($element['#entity_type'], $id))) {
+          $excludes[$group->gid] = $group->gid;
+        }
+      }
+
+      // Get default values from URL, or from the edited entity.
+      $default_values = og_get_context_by_url();
+      // Keep the group ID of the selected items, as they might be needed again,
+      // and we don't want to iterate over the items again.
+      $items_gid = array();
+      if (!empty($items)) {
+        foreach ($items as $item) {
+          // Some groups might be already deleted, but we don't bulk
+          // delete the fields of the entities associated with that group.
+          // So make sure the hidden selected fields are only for existing
+          // groups.
+          if (in_array($item['gid'], $audience['content groups']) || in_array($item['gid'], $audience['other groups'])) {
+            $default_values[$item['gid']] = $item['gid'];
+            $items_gid[] = $item['gid'];
+          }
+        }
+      }
+
+      foreach (array('content groups', 'other groups') as $key) {
+        if (!empty($audience[$key])) {
+          // Get the label un-sanitized, as they will be laster sanitized
+          // according to the form type.
+          $audience[$key] = og_label_multiple($audience[$key], FALSE);
+        }
+      }
+
+      /////////////////////
+      //
+      // Below This is code that I need to remove - it is here for testing purposes
+      //
+      /////////////////////
+
+      // The group options presented to the user.
+      $options = array();
+      $hidden_selected_gids = array();
+      $type = 'select';
+      if ($opt_group) {
+        // Show "My groups" and "Other groups".
+        if ($my_groups = array_diff_key($audience['content groups'], $excludes)) {
+          $options += array(t('My groups') => $my_groups);
+        }
+        if ($other_groups = array_diff_key($audience['other groups'], $excludes)) {
+          $options += array(t('Other groups') => $other_groups);
+        }
+      }
+      else {
+        // Show only "My groups".
+        $options = array_diff_key($audience['content groups'], $excludes);
+        // If there are items that are already selected but the user doesn't
+        // have access to them, we need to keep track of them.
+        $hidden_selected_gids = drupal_map_assoc(array_diff($items_gid, array_keys($options)));
+      }
+
+      if (empty($options)) {
+        // There are no group, so don't show any input element.
+        $type = 'item';
+        $element['#description'] = t('There are no groups you can select from.');
+        $properties = array();
+      }
+      else {
+        if (empty($element['#description'])) {
+          $element['#description'] = t('Select the groups this content should be associated with.');
+        }
+
+        $element['#multiple'] = $field['cardinality'] > 1 || $field['cardinality'] == FIELD_CARDINALITY_UNLIMITED;;
+        // Don't make the field required, if there are no groups.
+        $element['#required'] = $element['#required'] && !empty($options);
+
+        $properties = _options_properties($type, $element['#multiple'], $element['#required'], $options);
+        // If the element isn't required and cardinality is more than 1, and there
+        // are some options, and a "none" option.
+        if (!$element['#required'] && !$element['#multiple']) {
+          // Use a dummy instance in order to use theme('options_none');
+          $dummy_instance['widget']['type'] = 'options_select';
+          $options = array('_none' => theme('options_none', array('instance' => $dummy_instance))) + $options;
+        }
+      }
+      
+      
+      $element += array(
+      // Input should be TRUE only if there are groups that can be selected.
+        '#input' => $type != 'item',
+        '#type' => $type,
+        '#options' => $options,
+        '#default_value' => $default_values,
+        '#attributes' => array('class' => array('group-audience')),
+        '#disabled' => empty($options),
+      // Re-use options widget element validation, to correctly transform
+      // submitted values from field => delta to delta => field.
+      // @see options_field_widget().
+        '#value_key' => 'gid',
+        '#element_validate' => $type != 'item' ? array('options_field_widget_validate') : array(),
+        '#properties' => $properties,
+      // Add OG specific context.
+        '#opt_group' => $opt_group,
+        '#audience' => $audience,
+        '#hidden_selected_gids' => $hidden_selected_gids,
+      );
+
+      /////////////////////
+      //
+      // Remove Code Above (used for testing)
+      //
+      /////////////////////
+      
+      //$output = gst_og_group_select_datatable_test();
+      $output = gst_og_group_select_table_widget($audience, $default_values, $settings);
+      //$output = '<div>this is a test</div>';
+      $element_tb = array(
+        '#markup' => $output,
+      	'#hidden_selected_gids' => $hidden_selected_gids,
+      );          
+           
+      break;
+  }
+  
+  return $element_tb;
+}
+
+function gst_og_group_select_datatable_test($user = NULL) {
+  $headers = array();
+  $rows = array();
+  $output = '';
+
+  $headers = array(
+  array(
+        'data' => 'checkbox',
+        'class' => 'list-checkbox'
+  ),
+  array(
+        'data' => 'Title',
+        'class' => 'list-title'
+  ),
+  array(
+        'data' => 'Data',
+        'class' => 'list-data'
+  ),
+  );
+
+  // Load All Groups
+  $gids = og_get_group_ids();
+  $groups = _load_groups($gids, 'group', '_compare_group');  //
+
+  foreach ($groups as $gid => $group) {
+    $cells = array();
+    $cells[] = array(
+      'data' => array(
+        '#type' => 'checkbox',
+        '#title' => 'Chk',
+      ),
+      'class' => '',
+    );
+    $cells[] = array(
+      'data' => $group->label,
+    );
+    $cells[] = array(
+      'data' => 'Member-' . $gid,
+    );
+    $rows[] = $cells;
+  }
+
+  $output = theme('datatable', array('header' => $headers, 'rows' => $rows));  
+  return $output;
+
+}
+
+function gst_og_group_select_table_widget($audience, $default_values, $settings = NULL) {
+
+  $datatables = module_exists('datatables');
+  if ($datatables) {
+    // DataTable Settings    
+    $bFilter = isset($settings['bFilter']) ? $settings['bFilter'] : TRUE;
+    $bPaginate = isset($settings['bPaginate']) ? $settings['bPaginate'] : TRUE;
+    $sPaginationType = isset($settings['sPaginationType']) ? $settings['sPaginationType'] : 'full_numbers';
+    $iDisplayLength = isset($settings['iDisplayLength']) ? $settings['iDisplayLength'] : 10;
+    $bLengthChange = isset($settings['bLengthChange']) ? $settings['bLengthChange'] : TRUE;    
+  }
+  
+  $show_membership_col = FALSE;
+  if ($settings) {
+    $form_entity_type = $settings['form_entity_type'];
+    if ($form_entity_type == 'user' && isset($settings['user'])) {
+      $form_user = $settings['user'];
+      // We only care about showing Membership Status col for User forms
+      $show_membership_col = $settings['show_membership_col'];
+    }    
+  }
+  $headers = array();
+  $rows = array();
+  $output = '';
+  $show_status = FALSE;
+  $col = 0;
+  $headers = array();
+  $headers['checkbox'] = array(
+    'data' => '',
+    'class' => 'table-checkbox col-' . $col++,
+    'datatable_options' => array(),    
+    );
+  if ($datatables) {
+    $headers['checkbox_sort'] = array(
+      'data' => '',
+      'class' => 'table-checkbox-sort col' . $col++,      
+      'datatable_options' => array(
+        'bVisible' =>  FALSE,
+      ),
+    );
+    $checkbox_sort_col = array_search("checkbox_sort", array_keys($headers));
+    $headers['checkbox']['datatable_options'] += array('iDataSort' => $checkbox_sort_col);
+  }
+      
+  $headers['title'] = array(
+    'data' => 'Group Name',
+    'class' => 'table-title col-' . $col++,
+  	'datatable_options' => array(),
+    // The following is not working    
+//     'datatable_options' => array(
+//       'asSorting' =>  array('asc'),
+//     ),    
+    );
+  $headers['type'] = array(
+    'data' => 'Type',
+    'class' => 'table-type col-' . $col++,
+  	'datatable_options' => array(),
+    );  
+  if ($show_membership_col) {
+    $headers['status'] = array(
+      'data' => 'Membership Status',
+      'class' => 'table-status col-' . $col++,
+    	'datatable_options' => array(),
+      );
+  }
+    
+  //ADFTODO: Fix this so it uses the $opt_group setting to display groups correctly (Content/Other/All) - and optimize it.
+  // Load the Group Objects
+  $content_groups = _load_groups(array_keys($audience['content groups']), 'group', '_compare_group');
+  $other_groups = _load_groups(array_keys($audience['other groups']), 'group', '_compare_group');
+  $all_groups = _load_groups(array_keys($audience['content groups'] + $audience['other groups']), 'group', '_compare_group');
+  $bundles = field_info_bundles();    // Get Bundle Info for Entity Types
+  
+  // Create Rows
+  $rows = array();
+  foreach ($all_groups as $gid => $gobj) {
+    $entity_type = $gobj->entity_type;
+    
+    // If Widget in a User Form, Get Subscription/Membership Status for User
+    if ($form_entity_type == 'user' && isset($form_user)) {
+      // NOTE: The 'entity_type" that the following function wants is the EntityType
+      //   of the 2nd param ($gobj), and even though it has an 'entity_type' of 'node'
+      //   it is ACTUALLY a 'group' internally, so we pass in 'group' 
+      //   Also, what we are trying to determine is the subscription/perm relationship
+      //     between the $gobj Object and the $form_user Object (not the CURRENT user).
+      //     This is because we could be viewing a User Profile page and we want the
+      //     relationship for THAT user, not the Current user.
+      $sm_status = _get_user_group_membership_status('group', $gobj, $form_user);
+    }
+
+    // FILL CELLS \\
+    $cells = array();
+    // Checkbox
+    $default_value = in_array($gid, $default_values) ? 1 : 0;
+    $checked = $default_value;
+    $cells['checkbox'] = array(
+      'data' => array(
+        '#name' => 'checkbox_' . $gid,
+      	'#type' => 'checkbox',
+      	'#title' => '',
+      	'#default_value' => $default_value,
+      	'#checked' => $checked,    		
+        ),
+      'class' => 'table-checkbox',
+      );
+    if ($datatables) {
+      $data = $default_value ? '1 member in' : '0 non out';
+      $cells['checkbox_sort'] = array(
+        'data' => $data,
+        'class' => 'table-checkbox-sort',
+      );
+    }
+    
+    // Group Title
+    $title_link = l($gobj->label, "node/" . $gobj->etid);
+    $cells['title'] = array(
+      'data' => $title_link,
+      'class' => 'table-title',
+      );
+    
+    // Type
+    $entity = og_load_entity_from_group($gid);
+    $bundle = $entity->type;
+    $bundle_label = $bundles[$entity_type][$bundle]['label'];    
+    $cells['type'] = array(
+      'data' => $bundle_label,
+      'class' => 'table-type',
+    );
+
+    if ($show_membership_col) {
+      // Status
+      switch ($sm_status) {
+        case 'manager':
+          $status = t('Manager');
+          break;
+        case 'member':
+          $status = t('Member');
+          break;
+        case 'Pending':
+          $status = t('Pending');
+          break;          
+        case 'blocked':
+          $status = t('Blocked');
+          break;
+        case 'subscribe':
+          $status = t('Non-Member');
+          break;          
+        case 'request':
+          $status = t('Non-Member<br/>(Moderated)');
+          break;
+        case 'closed':
+          $status = t('Closed');
+          break;
+      }
+      //$status = _get_user_group_status($gid);
+      $cells['status'] = array(
+        'data' => $status,
+        'class' => 'table-status',
+      );
+    }
+
+    // Add Cells to Rows
+    $rows[] = $cells;
+  }
+  
+  // Theme headers/rows into Table
+  if ($datatables) {
+    $datatable_options = array();   
+    $datatable_options += array(
+      'aoColumns' => array(),
+    );     
+    if ($bPaginate) {
+      $iDisplayLength = isset($iDisplayLength) ? $iDisplayLength : 10;
+      $bLengthChange = isset($bLengthChange) ? $bLengthChange : FALSE;
+      $sPaginationType = isset($sPaginationType) ? $sPaginationType : 'two_button';
+      $datatable_options += array(
+        'iDisplayLength' => $iDisplayLength,
+      	'bLengthChange' => $bLengthChange,        
+        'sPaginationType' => $sPaginationType,
+      );
+    }
+    
+    
+    $bFilter = isset($bFilter) ? $bFilter : FALSE;
+    $datatable_options += array(
+      'bFilter' => $bFilter,      
+    );
+    // Sort Settings
+    $title_col = array_search("title", array_keys($headers));
+    $datatable_options += array(  
+      'aaSorting' => array(
+        '0' => array($title_col, 'asc'),
+      ),
+    );
+    //$datatable_options = array('iDisplayLength' => 20);
+    $output = theme('datatable', array(
+    	'header' => $headers, 
+    	'rows' => $rows, 
+      // ADFFIXED: This is the current issue - if I uncomment this, the datatable does not display.
+      // Doh! Issue was that the sPaginationType was 'two_button' NOT 'two_buttons'. Once I fixed that, it is fine.
+    	'attributes' => array(
+    		'datatable_options'=> $datatable_options
+        )
+      )
+    );    
+  } else {
+    $output = theme('table', array('header' => $headers, 'rows' => $rows));
+  }
+  
+  return $output;
+}
+
+/**
+ * Validate handler; Re-add hidden selected gids if exist.
+ */
+function gst_og_group_select_field_widget_form_validate($form, &$form_state) {
+  if (!empty($form[OG_AUDIENCE_FIELD][LANGUAGE_NONE]['#hidden_selected_gids']) && $gids = $form[OG_AUDIENCE_FIELD][LANGUAGE_NONE]['#hidden_selected_gids']) {
+    // Rebuild the form state values.
+    foreach ($form_state['values'][OG_AUDIENCE_FIELD][LANGUAGE_NONE] as $key => $value) {
+      $gids[$value['gid']] = $value['gid'];
+    }
+
+    $delta = 0;
+    $value = array();
+    foreach ($gids as $gid) {
+      $value[LANGUAGE_NONE][$delta]['gid'] = $gid;
+      ++$delta;
+    }
+    // Set the new values.
+    form_set_value($form[OG_AUDIENCE_FIELD], $value, $form_state);
+  }
+}
+
+function _load_groups($gids, $entity_type = 'node', $sort_function = NULL) {
+  $groups = array();
+  if (is_array($gids)) {
+    foreach ($gids as $gid) {
+      $groups[$gid] = og_get_group($entity_type, $gid);
+    }
+  } else {
+    $groups[$gids] = og_get_group($entity_type, $gids);
+  }
+
+  if ($sort_function) {
+    usort($groups, $sort_function);
+    $groups_sorted = array();
+    foreach ($groups as $data) {
+      $entity = og_load_entity_from_group($data->gid);
+      $groups_sorted[$data->gid] = $data;
+    }
+    $groups = $groups_sorted;    
+  }
+  return $groups;
+}
+
+function gst_og_load_groups_from_membership($members) {
+  $groups = array();
+  foreach ($members as $id => $member) {
+    $group = og_get_group($member->entity_type, $member->etid);
+    if ($group) {
+      $groups[$group->gid] = $group;
+    }
+  }
+  return $groups;
+}
+
+function _compare_group($key1, $key2) {
+  $val1 = is_object($key1) ? $key1->label : $key1;
+  $val2 = is_object($key2) ? $key2->label : $key2;
+  return strcmp($val1, $val2);
+}
+
+function _get_group_status($gid, $entity_type, $entity) {
+  $status_id = og_get_entity_state($gid, $entity_type, $entity);
+  switch ($status_id) {
+    case '1': $status = 'Member'; break;
+    case '2': $status = 'Pending'; break;
+    case '3': $status = 'Blocked'; break;
+    default:  $status = 'Non-Member'; break;
+  }
+
+  return $status;
+}
+
+function _get_user_group_status($gid, $current_user = NULL) {
+  if (!$current_user) {
+    global $user;
+  } else {
+    $user = $current_user;
+  }
+  return _get_group_status($gid, 'user', $user);
+}
+
+/**
+* Return User's Group Subscription Perms/Status according to user's permissions.
+*
+* @param $entity_type
+* @param $entity
+* @param $account
+* @return string Possible return values:
+* 	manager:		Member: User is the Group Manager
+* 	member:			Member: User is a Group Member
+* 	pending:		Non-Member: User has requested Membership but it is Pending Approval
+* 	blocked:		Non-Member: User is Blocked from this group
+* 	subscribe:	Non-Member: User is NOT a member, and can Subscribe WITHOUT approval
+* 	request:		Non-Member: User is NOT a member, and can Request membership (with approval)
+* 	closed:			Non-Member: Group is closed and not accepting ANY new members
+* 
+*/
+function _get_user_group_membership_status($entity_type, $entity, $account = NULL) {
+  $return = '';
+  
+  if (empty($account)) {
+    global $user;
+    $account = clone($user);
+  }
+  
+  list($id) = entity_extract_ids($entity_type, $entity);
+  
+  if (($group = og_get_group($entity_type, $id))) {
+    if (!empty($entity->uid) && ($entity->uid == $user->uid)) {
+      $return = 'manager';           // User is the group manager
+    }
+    else {
+      // Check if the user is a group member.
+      if (og_is_member($group->gid, 'user', $account, array(OG_STATE_ACTIVE))) {
+        $return = 'member';        // User is already a group member
+      } 
+      elseif (og_is_member($group->gid, 'user', $account, array(OG_STATE_PENDING))) {
+        $return = 'pending';      // User is a non-member, but has REQUESTRED Membership
+      }
+      else {
+        if (og_is_member($group->gid, 'user', $account, array(OG_STATE_BLOCKED))) {
+          $return = 'blocked';      // Non-Member: User is blocked from membership
+          return $return;
+        }
+  
+        if (og_user_access($group->gid, 'subscribe without approval', $account)) {
+          $return = 'subscribe';    // Non-Member: User can subscribe without approval
+        }
+        elseif (og_user_access($group->gid, 'subscribe')) {
+          $return = 'request';     // Non-Member: User must request membership
+        }
+        else {
+          $return = 'closed';      // Non-Member: Closed group, only admin can add
+        }  
+      }
+    }
+  }
+  
+  return $return;  
+}
